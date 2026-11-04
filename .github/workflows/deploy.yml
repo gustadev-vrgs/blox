@@ -48,6 +48,58 @@ jobs:
           echo "Publicando $REF_PUBLICADA (commit $COMMIT) — evento: $EVENTO"
           cat build-info.json
 
+      - name: Validar a release (bloqueia o deploy se algo estiver errado)
+        run: |
+          node <<'JS'
+          const fs = require('fs');
+          const vm = require('vm');
+          const erros = [];
+          const ler = (arq) => JSON.parse(fs.readFileSync(arq, 'utf8'));
+
+          // 1) Config e catálogo precisam ser JSON válidos
+          const config = ler('config/app-config.json');
+          const jogos = ler(config.catalogoUrl).jogos;
+          console.log(`Validando versão ${config.versao}: ${jogos.length} jogos, capas em ${config.pastaCapas}`);
+
+          // 2) Toda capa citada no catálogo precisa existir na pasta configurada
+          for (const j of jogos) {
+            if (!fs.existsSync(config.pastaCapas + j.capa)) {
+              erros.push(`capa ausente: ${config.pastaCapas + j.capa} (${j.id})`);
+            }
+          }
+
+          const bf = config.blackFriday || {};
+          // 3) Promoções só para jogos que existem, com percentual entre 1 e 99
+          for (const [id, promo] of Object.entries(bf.promocoes || {})) {
+            if (!jogos.some((j) => j.id === id)) erros.push(`promoção para jogo inexistente: ${id}`);
+            if (!(promo.percentual > 0 && promo.percentual < 100)) erros.push(`percentual inválido em ${id}`);
+          }
+
+          // 4) Intervalo do contador em segundos (>= 1)
+          if (bf.ativa && !(bf.intervaloContadorSegundos >= 1)) erros.push('intervaloContadorSegundos deve ser >= 1');
+
+          // 5) A regra de preço precisa funcionar para TODOS os jogos do catálogo
+          if (fs.existsSync('js/precos.js')) {
+            const ctx = {};
+            vm.runInNewContext(fs.readFileSync('js/precos.js', 'utf8'), ctx);
+            for (const j of jogos) {
+              try {
+                const p = ctx.precoComDesconto(j, config);
+                if (!(typeof p === 'number' && p > 0 && p <= j.preco)) erros.push(`preço inválido para ${j.id}: ${p}`);
+              } catch (e) {
+                erros.push(`precoComDesconto quebra em ${j.id}: ${e.message}`);
+              }
+            }
+          }
+
+          if (erros.length) {
+            erros.forEach((e) => console.log(`::error::${e}`));
+            console.log(`Release REPROVADA: ${erros.length} problema(s). Deploy bloqueado.`);
+            process.exit(1);
+          }
+          console.log('Release APROVADA: todas as verificações passaram.');
+          JS
+
       - name: Configurar Pages
         uses: actions/configure-pages@v5
 
