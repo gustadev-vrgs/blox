@@ -7,6 +7,9 @@ function precoComDesconto(jogo, config) {
     return jogo.preco;
   }
   const promocao = campanha.promocoes[jogo.id];
+  if (!promocao) {
+    return jogo.preco; // jogo fora da promoção: preço cheio
+  }
   const desconto = promocao.percentual / 100;
   return Math.round(jogo.preco * (1 - desconto) * 100) / 100;
 }
